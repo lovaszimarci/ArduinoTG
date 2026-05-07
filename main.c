@@ -10,9 +10,16 @@ volatile bool SpikeFlag = false;
 
 
 //puffer adatok
-uint16_t puffer[8];
-uint8_t puffer_index;
-uint32_t running_avarage;
+uint16_t puffer[8] = {0,0,0,0,0,0,0,0};
+uint8_t puffer_index = 0;
+uint32_t running_sum = 0;
+bool PufferIsFull = false;
+
+
+uint16_t Avarage_deltaT;
+uint16_t Bph;
+
+
 
 
 // SYNC fazis flages es valtozok
@@ -34,8 +41,7 @@ typedef enum{
      ha tobb mint 80ms akkor valoszinuleg egy uj valid tuske nem pedig egy viszhang vagy egy random zaj
      ha validnak talalta az algoritmus akkor a state BLANK_PERIOD LESZ
      */
-    BLANK_PERIOD,// mute ACSR |= (1 << ACD); unmute ACSR &= ~(1 << ACD);
-    WAITING_FOR_NEW_SPIKE,
+    BLANK_PERIOD,
     PROCESSSING,
 } State;
 
@@ -130,7 +136,7 @@ acis1/0 =10 --> lefutó él
 
 */
 
-ACSR |= (1<<ACIE);
+
 ACSR |= (1<<ACIC);
 ACSR |= (1<<ACIS1);
 
@@ -161,7 +167,9 @@ int main(){
 
     while(true){
         switch(GlobalState){
+
             // SYNC fázis
+///////////////////////////////////////////////////////////////////////////
             case SYNC:
                 //ha van uj tuske
                 if(SpikeFlag){
@@ -194,18 +202,73 @@ int main(){
                         if(SYNC_deltaT > 5000 && SYNC_deltaT < 20000){
                             //todo korpuffer vagy feldolgozo fazisnak tovabbitani deltaT erteket
                             SYNC_previousT = SYNC_localT;
-                            GlobalState = BLANK_PERIOD;
+                            GlobalState = PROCESSSING;
                         }
                         else{
                             GlobalState = BLANK_PERIOD;
                         }
                     }
                 }
+                break;
+////////////////////////////////////////////////////////////////////////////
             case BLANK_PERIOD:
+
+            //suket fazis elejenek ideje
+            cli();
+            uint16_t CurrentTime = TCNT1;
+            sei();
+
+            uint16_t PassedTime = CurrentTime - SYNC_previousT;
+
+            // 60ms =  3750 timer step
+            if(PassedTime > 3750){
+                SpikeFlag = false;
+                // input capture flag torles
+                TIFR1 = (1<<ICF1);
+                //timer it ujra engedelyezes
+                TIMSK1 |= (1<<ICIE1);
+
+                GlobalState = SYNC;
+            }
+            break;
+
+////////////////////////////////////////////////////////////////////////////
+            case PROCESSSING:
+
+                //puffer init fazis
+                if(PufferIsFull == false){
+                    puffer[puffer_index] = SYNC_deltaT;
+                    running_sum += SYNC_deltaT;
+                    puffer_index += 1;
+                    if(puffer_index == 8){
+                        puffer_index = 0;
+                        PufferIsFull = true;
+                    }
+                }
+                else{
+
+                    // korpuffer frissitese
+                    running_sum -= puffer[puffer_index];
+                    puffer[puffer_index] = SYNC_deltaT;
+                    running_sum += SYNC_deltaT;
+                    puffer_index += 1;
+                    if(puffer_index == 8){
+                        puffer_index = 0;
+                    }
+
+                    // statisztikai adatok
+                    Avarage_deltaT = running_sum >> 3;
+                    Bph  = 225000000UL / Avarage_deltaT;
+
+                    // TODO lcd, uart kommunikacio
+
+                }
+
+                GlobalState = BLANK_PERIOD;
+                break;
 
         }
     }
-
 }
 
 //      usart communication
