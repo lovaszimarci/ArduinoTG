@@ -1,7 +1,18 @@
  #ifndef LCD_I2C_H  // Ha még nincs definiálva...
  #define LCD_I2C_H  // ...akkor most definiáljuk!
 
- #include <stdint.h> // A uint8_t típusok miatt ez kötelező ide
+ #include <stdint.h>
+
+ // LCD es I2C makrok
+ /*
+  I2C csomag bitek lcd funkcio szerint:
+
+  bit 7,6,5,4 adat bitek
+  bit 3 hattervilagitas ==> 1 vilagit, 0 nem
+  bit 2 enable ==> lcd-nek jelzes hogy olvassa be a biteket
+  bit 1 read/wrie  ==> mivel csak irni akarunk mindig 0
+  bit 0 register select ==> 0 akkor parancs, 1 akkor karakter
+  */
  #define LCD_ADDR (0x27<<1)
  //PCF8574T kiosztas
  #define LCD_BACKLIGHT 0x08  // Bit 3 (0b00001000)
