@@ -156,9 +156,45 @@ DIDR1 (digital input disable register)
  DIDR1 |= (1<<AIN0D);
 }
 
-void Setup(){
+
+// I2C alap fugvenyek
+void I2C_init(){
+    // clk sebesseg
+    // clk speed ==> 100kHz
+    // keplet: scl = CPU clock speed/ 16+2(TWBR) + (Prescaler value)
+    // 100kHz ==> 16 000 000/ 16+2(72) + 0
+    TWBR = 72;
+    TWSR = 0x00; // twps1, twps0 ==> 0, a tobbi read only
+    TWCR = (1 << TWEN); // enable bit
+}
+
+void I2C_start(){
+    TWCR = (1<<TWINT); // interrupt flag letorlese
+    TWCR = (1<<TWSTA); // start jel a slaveknek a buszon
+    TWCR = (1<<TWEN); //  eneable bit
+
+    //varakozas ameddig nem jelzet vissa a hw hogy kiadta a start jelet (a twint 1 be allitja a hw)
+    while(!(TWCR &(1<<TWINT)));
+}
+
+void I2C_write(uint8_t data){
+    TWDR = data; // adat atadas a data registernek
+
+    // interrrupt bit es engedelyezo bit
+    // (a start bit mar a start fugvenyben 1 be lett allitva)
+    TWCR = (1<<TWINT) | (1<<TWEN);
+
+    // varokazas hogy atvegye a slave a biteket es visszajelezzen az interrupt bittel
+    while (!(TWCR & (1 << TWINT)));
 
 }
+
+void I2C_stop(){
+    //stop jel
+    TWCR = (1<<TWSTO) | (1<<TWINT) | (1<<TWEN);
+}
+
+
 
 int main(){
     //hw setup
