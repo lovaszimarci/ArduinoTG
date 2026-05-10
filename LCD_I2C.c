@@ -50,7 +50,7 @@ void LCD_Write_I2C(uint8_t data){
     // eloszor cimezuk
     I2C_write(LCD_ADDR);
     // cimzes utan adat kuldese
-    LCD_Write_I2C(data);
+    I2C_write(data);
     // stop jel kiadasa
     I2C_stop();
 }

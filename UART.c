@@ -49,9 +49,9 @@ uint16_t UART_AskForBph(){
             // ha entert nyomatak
             if (c == '\r' || c == '\n') {
                 if (index > 0) { // Ha kuldtek is valamit nem csak entert
-                    buffer[index] = '\0'; // Szöveg lezárása
+                    buffer[index] = '\0'; // lezarjuk a szoveget
                     UART_Print("\r\nBPH Elmentve! Indul a meres...\r\n");
-                    break; // Kilépünk a végtelen ciklusból!
+                    break;
                 }
             }
             // Ha számot gépeltek (0-9) és van még hely
