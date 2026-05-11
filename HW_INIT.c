@@ -40,8 +40,8 @@ void SetupTimer(){
 --------------------------------------------------------------
 16bit számláló max érték = 65536
 Fclk = 16Mhz = 16 000 000 Hz
-prescale = 265
---> 16000000/265 = 62500Hz --> egy másodperc alatt 62500-at lép a timer
+prescale = 256
+--> 16000000/256 = 62500Hz --> egy másodperc alatt 62500-at lép a timer
 1 timer lépés = 0,000016s = 0.016 milisec = 16 mikrosec
 
 Tmax = 65536 x 0.000016s = 1.048576s

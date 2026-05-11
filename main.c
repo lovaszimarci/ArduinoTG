@@ -10,134 +10,154 @@
 #include "UART.h"
 
 
-// globalis allapot jelzok megszakitashoz
+//======================================
+//GLOBALIS VALTOZOK A TIMER INTERRUPTHOZ
+//======================================
 volatile uint16_t SpikeTimerValue;
 volatile bool SpikeFlag = false;
 
 
-//puffer adatok
+//===================================
+// KORPUFFER ADATAINAK INICIALIZALASA
+//===================================
 uint16_t puffer[8] = {0,0,0,0,0,0,0,0};
-uint8_t puffer_index = 0;
-uint32_t running_sum = 0;
-bool PufferIsFull = false;
+uint8_t puffer_index = 0; // ez a valtozo koveti az aktualis helyet az ertekekeknek
+uint32_t running_sum = 0; // ez az osszeg teszi lehetove hogy ne keljen mozgatni adatokat csak kivonni es hozzaadni
+bool PufferIsFull = false; // a kezdeti fazis jelzesehez hasznalt valtozo, true --> meg toltodik a puffer
 
 
-//statisztikai adatok
-// 12 utesenkent kuldi ki a program az lcd-re az infot
-#define AVERAGE_COUNT 12
-// volt e mar delta t ertek
+//=============================================
+//STATISZTIKAI ADATOK VALTOZOINAK INICIALIZALAS
+//=============================================
+
+#define AVERAGE_COUNT 12 // 12 utesenkent kuldi ki a program az lcd-re az infot
 uint8_t tick_count = 0;
-// beat errorhoz hasznalt delta t ertek
-uint32_t Previous_deltaT = 0;
-// a meresbol szamolt atlag elteres timer lepesben
-uint32_t Average_deltaT;
-uint32_t Average_deltaT_us;
-// a user altal megadott referencia bph ertek
-uint16_t ReferenceBph;
-// a referencia bph ertekbol kapunk egy referencia delta t erteket
-float Reference_deltaT_us;
-// az elteresek osszege
-float rate_sum =0.0;
-// a beat errorok osszege
-float beat_error_sum = 0.0;
+
+uint32_t Average_deltaT; // a meresbol szamolt atlag delta t ertek timer lepesben
+uint32_t Average_deltaT_us; // a meresbol szamolt atlag delta t ertek us-ben
+
+uint16_t ReferenceBph; // a user altal terminalban megadott referencia bph ertek
+float Reference_deltaT_us; // a referencia bph ertekbol kapunk egy referencia delta t erteket, ennek kesobb ad erteket a program
+
+float rate_sum =0.0; // az elteresek osszege
+float beat_error_sum = 0.0; // a beat errorok osszege
 
 
 
+//=====================================
+//SYNC FAZIS VALTOZOINAK INICIALIZALASA
+//=====================================
+bool SYNC_Starting = true; // true --> meg nem volt elozo hangtuske amihez viszonyitana, false --> mar volt elozo hangtuske
+uint16_t SYNC_previousT; // az elozo hangtuske timer erteke
+uint16_t SYNC_localT;// lokalis valtozo a timer ertekenek tarolasara
+uint16_t SYNC_deltaT; // bejovo ket tuske kozotti ido (delta t)
 
 
 
-
-
-
-// SYNC fazis flages es valtozok
-bool SYNC_Starting = true;
-uint16_t SYNC_previousT;
-//uint16_t SYNC_presentT;
-// lokalis valtozo az ido atmeneti tarolasara
-uint16_t SYNC_localT;
-uint16_t SYNC_deltaT;
-
-
-
-
+//================================
+// ALLAPOTGEP ALLAPOTAINAK LEIRASA
+//================================
 typedef enum{
-    SYNC = 1,
-    BLANK_PERIOD,
-    PROCESSING,
+    SYNC = 1, // egy atmeneti allapot a rosszul erzekelt tuskek kiszurasara, es a delta ido ertek kiszamitasara
+    BLANK_PERIOD, // itt ha mar a SYNC allpot validalta a tusket egy suket idoszakot valositunk meg hogy a viszhangok ne erzekelodjenek
+    PROCESSING, // itt dolgozza fel az ertekeket a rendszer statisztikava es kuldi ki az lcd re az ertekeket
 } State;
 
-State GlobalState = SYNC;
+State GlobalState = SYNC; // allapot tarolo
 
 
+//=============================
+// TIMER INTERRUPT MEGVALOSITAS
+//=============================
 
 ISR(TIMER1_CAPT_vect){
-    //timer érték mentése
-    SpikeTimerValue = ICR1;
-    // új tüske jelzése, tüske utáni jelérzékelés tiltásának állapota
-    SpikeFlag = true;
-    // timer megszakitas tiltasa
-    TIMSK1 &= ~(1 << ICIE1);
+
+    SpikeTimerValue = ICR1; //timer érték mentése
+    SpikeFlag = true; // új tüske jelzése, tüske utáni jelérzékelés tiltásának állapota
+    TIMSK1 &= ~(1 << ICIE1);// timer megszakitas tiltasa
+
 }
 
 
 
 
 int main(){
-    //hw setup
-    I2C_init();
-    LCD_Init();
-    UART_Init();
-    ReferenceBph = UART_AskForBph();
-    // cel elteres referencia bph alapjan
+
+    //=========================================
+    //HW, UART ES I2C LCD KIJELZO INICIALIZALAS
+    //=========================================
+
+    I2C_init(); // I2C kommunikaciohoz hasznalt folyamatok es regiszterek elokeszitese
+    LCD_Init(); // LCD kijelzo inicializalasa
+    UART_Init(); // UART kommunikaciohoz hasznalt folyamatok es regiszterek elokeszitese
+
+    ReferenceBph = UART_AskForBph(); // referencia bph ertek bekerese a usertol uart kommunikacioval terminalon keresztul
     // Ha a Target_BPH = 21600, akkor 1 oraban (3600 mp -> 3.600.000.000 us) van ennyi ütés.
-    Reference_deltaT_us = 3600000000.0 / ReferenceBph;
+    Reference_deltaT_us = 3600000000.0 / ReferenceBph; // a referencia bph ertekbol meghatarozott idokoz ket utes kozott, ez az elerndo cel
 
-    SetupTimer();
-    SetupComp();
-
-
+    SetupTimer(); //Timer felprogramozasa a megfelelo mukodesre
+    SetupComp(); // annalog komparator felprogramozasa a megfelelo mukodesre
 
 
 
+//===============================================
+//While loop kezdete, itt kezd el merni a program
+//===============================================
     while(true){
         switch(GlobalState){
-///////////////////////////////////////////////////////////////////////////
+
+            //=============================
+            //SYNC FAZIS MEGVALOSITASA
+            //=============================
+
             case SYNC:
-                //ha van uj tuske
-                if(SpikeFlag){
-                    cli();
-                    // timer lokalis valtozoba pakolasa
-                    SYNC_localT = SpikeTimerValue;
+
+                if(SpikeFlag){ // ha a timer jelzett hogy van uj tuske akkor kezeljuk
+                    cli(); // ameddig atmentjuk a regisztert, a megszakitasokat letiltjuk
+                    SYNC_localT = SpikeTimerValue; // timer ertekenek lokalis valtozoba pakolasa
                     sei();
 
-                    // uj tuske jelzeseneke hamisba allitasa
-                    SpikeFlag = false;
+                    SpikeFlag = false; // uj tuske jelzeseneke hamisba allitasa
 
-                    if(SYNC_Starting){
-                        //init fazisban van a rendszer, meg nem tud deltaT-t szamolni
-                        SYNC_previousT = SYNC_localT;
-                        SYNC_Starting  = false;
-                        GlobalState = BLANK_PERIOD;
+                    if(SYNC_Starting){ //meg nem volt elozo tuske ertek igy nem tud delta ido erteket szamolni
+                        //================================
+                        //KEZDETI FAZIS ELOZO TUSKE NELKUL
+                        //================================
+                        SYNC_previousT = SYNC_localT; // elozo tuske ertek beallitasa
+                        SYNC_Starting  = false; // a kovetkezo tuskenel mar lesz elozo tuske, nincs kezdeti fazis
+                        GlobalState = BLANK_PERIOD; //  kovetkezo fazis beallitasa
                     }
                     else{
-                        // ket utes kozotti ido - meg nem biztos hogy valid utes
-                        SYNC_deltaT = SYNC_localT - SYNC_previousT;
 
-                        //deltaT validalas
-                        // ora delta ido ms ben
-                        // min: 80ms max: 320ms - ezekre mar ra lett szamitva hibahatar
-                        // 1 timer lepes 0.016 ms
-                        // 80ms = 5000 timer lepes
-                        // 320ms = 20000 timer lepes
+                        SYNC_deltaT = SYNC_localT - SYNC_previousT;// ket utes kozotti ido - meg nem biztos hogy valid utes
 
+                        //MEGJEGYZES:
+                                    //deltaT validalas
+                                    // min: 80ms max: 320ms (ezek az ertekeke mar a hibahatarral egyuttiek)
+                                    // 1 timer lepes 0.016 ms
+                                    // 80ms = 5000 timer lepes
+                                    // 320ms = 20000 timer lepes
+                                    // ha nagyon hamar jott utana uj tuske akkor valoszinuleg zajt erzekelt
+                                    // ha nagyon keson jott utana akkor megint vagy zaj vagy levettek az orat
 
-                        if(SYNC_deltaT > 5000 && SYNC_deltaT < 20000){
-                            //todo korpuffer vagy feldolgozo fazisnak tovabbitani deltaT erteket
-                            SYNC_previousT = SYNC_localT;
+                        if(SYNC_deltaT > 5000 && SYNC_deltaT < 20000){ // idobeli hatarok ellenorzese delta t ertekre
+                            // VALID UTES
+                            SYNC_previousT = SYNC_localT;  //
                             GlobalState = PROCESSING;
                         }
                         else{
-                            GlobalState = BLANK_PERIOD;
+                            // ERVENYTELEN UTES
+                            if(SYNC_deltaT > 20000){
+                                // kihagyott egy utest a gep
+                                // kotelezo frissiteni az elozo utest hogy friss helyrol induljon
+                                SYNC_previousT = SYNC_localT;
+                            }
+                            else{
+                                //Kisebb volt a detla t ertek mint 5000
+                                // valoszinuleg zaj volt --> nem frissitjuk az elozo tuske erteket
+                                GlobalState = BLANK_PERIOD;
+                            }
+
                         }
                     }
                 }
