@@ -18,9 +18,7 @@ void I2C_init(){
 
 // start procedura
 void I2C_start(){
-    TWCR = (1<<TWINT); // interrupt flag letorlese
-    TWCR = (1<<TWSTA); // start jel a slaveknek a buszon
-    TWCR = (1<<TWEN); //  eneable bit
+    TWCR = (1<<TWINT) | (1<<TWSTA) | (1<<TWEN);
 
     //varakozas ameddig nem jelzet vissa a hw hogy kiadta a start jelet (a twint 1 be allitja a hw)
     while(!(TWCR &(1<<TWINT)));

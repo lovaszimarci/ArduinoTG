@@ -8,6 +8,7 @@
 #include "LCD_I2C.h"
 #include "HW_INIT.h"
 #include "UART.h"
+#include "DS3231.h"
 
 
 //======================================
@@ -109,9 +110,17 @@ int main(){
     //HW, UART ES I2C LCD KIJELZO INICIALIZALAS
     //=========================================
 
-    I2C_init(); // I2C kommunikaciohoz hasznalt folyamatok es regiszterek elokeszitese
-    LCD_Init(); // LCD kijelzo inicializalasa
     UART_Init(); // UART kommunikaciohoz hasznalt folyamatok es regiszterek elokeszitese
+    UART_Print("bebootolt az uart\r\n");
+    UART_Print("i2c inditasa\r\n");
+    I2C_init(); // I2C kommunikaciohoz hasznalt folyamatok es regiszterek elokeszitese
+    UART_Print("bebootolt az i2c\r\n");
+    UART_Print("ora inditasa\r\n");
+    DS3231_Init_1Hz(); // kulso orajel inicializalasa
+    UART_Print("bebootolt az ora\r\n");
+    UART_Print("lcd inditasa\r\n");
+    LCD_Init(); // LCD kijelzo inicializalasa
+    UART_Print("bebootolt az lcd\r\n");
 
     ReferenceBph = UART_AskForBph(); // referencia bph ertek bekerese a usertol uart kommunikacioval terminalon keresztul
     // Ha a Target_BPH = 21600, akkor 1 oraban (3600 mp -> 3.600.000.000 us) van ennyi ütés.
@@ -125,6 +134,8 @@ int main(){
 //===============================================
 //While loop kezdete, itt kezd el merni a program
 //===============================================
+//
+    sei();
     while(true){
         switch(GlobalState){
 
