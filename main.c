@@ -16,14 +16,16 @@
 //======================================
 volatile uint16_t SpikeTimerValue;
 volatile bool SpikeFlag = false;
-volatile float Actual_tick_us = 16.0; // egy timer lepes hossza mikroszekundumban, ezt kesobb valtoztatja a kulso ora modul
+volatile float Actual_tick_us = 4.0; // egy timer lepes hossza mikroszekundumban, ezt kesobb valtoztatja a kulso ora modul
 volatile uint16_t DS3231_prev_tcnt = 0; // az adott masodperc elotti a kulso orajel megerkeztekor levo timer ertek
+volatile uint32_t Shared_Ticks_Per_Sec = 250000; //ennyiszer lep egy masodpercben a timer
+volatile bool RTC_Update_Flag = false; //
 
 
 //===================================
 // KORPUFFER ADATAINAK INICIALIZALASA
 //===================================
-uint16_t puffer[8] = {0,0,0,0,0,0,0,0};
+uint16_t puffer[32] = {0};
 uint8_t puffer_index = 0; // ez a valtozo koveti az aktualis helyet az ertekekeknek
 uint32_t running_sum = 0; // ez az osszeg teszi lehetove hogy ne keljen mozgatni adatokat csak kivonni es hozzaadni
 bool PufferIsFull = false; // a kezdeti fazis jelzesehez hasznalt valtozo, true --> meg toltodik a puffer
@@ -33,7 +35,7 @@ bool PufferIsFull = false; // a kezdeti fazis jelzesehez hasznalt valtozo, true 
 //STATISZTIKAI ADATOK VALTOZOINAK INICIALIZALAS
 //=============================================
 
-#define AVERAGE_COUNT 8 // 12 utesenkent kuldi ki a program az lcd-re az infot
+#define AVERAGE_COUNT 32 // 32 utesenkent kuldi ki a program az lcd-re az infot
 uint8_t tick_count = 0;
 
 uint32_t Average_deltaT; // a meresbol szamolt atlag delta t ertek timer lepesben
@@ -86,21 +88,17 @@ ISR(TIMER1_CAPT_vect){
 //================================================
 
 ISR(INT0_vect){
-
-
     uint16_t current_tcnt = TCNT1; // timer erteke eppen hol tart
 
-    uint16_t diff =  current_tcnt - DS3231_prev_tcnt; // a ket timer ertek kozotti kulonbseg, ennyit lepett a timer pontosan 1s alatt
-    DS3231_prev_tcnt = current_tcnt;
 
-    // ha nagyon elutne akkor nem vesszuk figyelembe
-    // idealis esetben 62500 ilyenkor pontosan annyit lepett mint ellotte
-    if(diff > 60000 && diff < 65000 ){
-        //kiszamoljuk a timer tenyleges lepeshosszat mikroszekundumban
-        Actual_tick_us = 1000000.0 / diff;
+    uint16_t diff_16bit = current_tcnt - DS3231_prev_tcnt; // a kulonbseg a ket masodperc timer erteke kozott
+    DS3231_prev_tcnt = current_tcnt; // itt allitotta meg a kulso ora a timert
 
-    }
+    //a timer 1s alatt 3szor csordul tul mert 1s = 250 000 timer lepes, a timer pedig 16bit vagyis 65 536-ig szamol
+    // a teljes tulcsordulas lepesszama 196 608
+    Shared_Ticks_Per_Sec = (uint32_t)diff_16bit + 196608; // ez a pontos masodpercenkenti lepesszam
 
+    RTC_Update_Flag = true; // van friss masodperc lepes adat (a float matematikat nem a megszakitasban szamoljuk)
 }
 
 
@@ -116,6 +114,7 @@ int main(){
     I2C_init(); // I2C kommunikaciohoz hasznalt folyamatok es regiszterek elokeszitese
     UART_Print("bebootolt az i2c\r\n");
     UART_Print("ora inditasa\r\n");
+    SetupDS3231(); // a D2 gpio pin felprogramozasa hogy be tudja fogani a kulso orajelet
     DS3231_Init_1Hz(); // kulso orajel inicializalasa
     UART_Print("bebootolt az ora\r\n");
     UART_Print("lcd inditasa\r\n");
@@ -125,6 +124,27 @@ int main(){
     ReferenceBph = UART_AskForBph(); // referencia bph ertek bekerese a usertol uart kommunikacioval terminalon keresztul
     // Ha a Target_BPH = 21600, akkor 1 oraban (3600 mp -> 3.600.000.000 us) van ennyi ütés.
     Reference_deltaT_us = 3600000000.0 / ReferenceBph; // a referencia bph ertekbol meghatarozott idokoz ket utes kozott, ez az elerndo cel
+
+
+
+
+    //======================================
+    // DINAMIKUS ABLAK ES SUKETIDO SZAMITAS
+    //======================================
+
+    uint32_t Target_deltaT_ticks = Reference_deltaT_us / Actual_tick_us;
+
+    //10% tolerancia ablak
+    uint32_t Window_min = Target_deltaT_ticks * 0.90;
+    uint32_t Window_max = Target_deltaT_ticks * 1.10;
+
+    //biztonsagi korlat a timer tulcsordulas eseten (pl 14400 Bph)
+    if(Window_max > 65000){
+        Window_max = 65000;
+    }
+
+    //suketido beallitas dinamikusan 60%
+    uint32_t Blank_ticks = Target_deltaT_ticks * 0.60;
 
     SetupTimer(); //Timer felprogramozasa a megfelelo mukodesre
     SetupComp(); // annalog komparator felprogramozasa a megfelelo mukodesre
@@ -172,8 +192,7 @@ int main(){
                                     // 320ms = 20000 timer lepes
                                     // ha nagyon hamar jott utana uj tuske akkor valoszinuleg zajt erzekelt
                                     // ha nagyon keson jott utana akkor megint vagy zaj vagy levettek az orat
-
-                        if(SYNC_deltaT > 5000 && SYNC_deltaT < 20000){ // idobeli hatarok ellenorzese delta t ertekre
+                        if(SYNC_deltaT > Window_min && SYNC_deltaT < Window_max){ // idobeli hatarok ellenorzese delta t ertekre
                             //=========================
                             //VALID IDOKULONBSEG
                             //=========================
@@ -184,10 +203,11 @@ int main(){
                             //========================
                             //ERVENYTELEN IDOKULONBSEG
                             //========================
-                            if(SYNC_deltaT > 20000){
+                            if(SYNC_deltaT >= Window_max){
                                 // kihagyott egy utest a gep
                                 // kotelezo frissiteni az elozo utest hogy friss helyrol induljon
                                 SYNC_previousT = SYNC_localT;
+                                GlobalState = BLANK_PERIOD;
                             }
                             else{
                                 //Kisebb volt a detla t ertek mint 5000
@@ -210,8 +230,7 @@ int main(){
 
             uint16_t PassedTime = CurrentTime - SYNC_previousT; // eltelt ido szamitasa
 
-            // 60ms =  3750 timer step
-            if(PassedTime > 3750){
+            if(PassedTime > Blank_ticks){
 
                 SpikeFlag = false; // letorolhetjuk a hangtuske flagjet mert letelt az ido
                 TIFR1 = (1<<ICF1); // timer input capture flagjenek torlese regiszterbol
@@ -232,7 +251,7 @@ int main(){
                     puffer[puffer_index] = SYNC_deltaT;
                     running_sum += SYNC_deltaT;
                     puffer_index += 1;
-                    if(puffer_index == 8){
+                    if(puffer_index == 32){
                         puffer_index = 0;
                         PufferIsFull = true;
                     }
@@ -244,16 +263,34 @@ int main(){
                     puffer[puffer_index] = SYNC_deltaT;
                     running_sum += SYNC_deltaT;
                     puffer_index += 1;
-                    if(puffer_index == 8){
+                    if(puffer_index == 32){
                         puffer_index = 0;
                     }
+
+
+                    //=============================
+                    //Órajel kalibralas
+                    //=============================
+
+
+                    if(RTC_Update_Flag){
+                        // csak akkor kalibralja ujra a rendszert hogyha hiheto az adat
+                        if(Shared_Ticks_Per_Sec > 245000 && Shared_Ticks_Per_Sec < 255000){
+                            // az arduino kristalyanak kompenzalasa
+                            Actual_tick_us = 1000000.0 / (float)Shared_Ticks_Per_Sec;
+                            }
+                        RTC_Update_Flag = false; // Zászló leengedése
+                    }
+
+
 
                     //===========================================
                     // NAPI ELTERES SZAMITAS
                     //===========================================
 
-                    Average_deltaT = running_sum >> 3; // korpuffer altal kezelt runing sum osztasa 8-al, shifteleses megoldassal
-                    Average_deltaT_us = Average_deltaT * Actual_tick_us;  // az atlag elteres idore valtasa timer lepesrol
+                    float Average_deltaT_float = (float)running_sum / 32.0; // korpuffer altal kezelt runing sum osztasa 32-vel
+                    float Average_deltaT_us = Average_deltaT_float * Actual_tick_us; // az atlag elteres idore valtasa timer lepesrol
+
 
                     //napi atlag elteres szamitasa:
                     // ((gyari referencia idokoz - sajat atlagolt idokoz)/ gyari referencia idokoz) * egy nap masodpercekben
@@ -266,20 +303,41 @@ int main(){
                         //==========================================
                         // BEAT ERROR SZAMITAS
                         //==========================================
-                        for(int i = 1; i < 8;i++ ){
+                        for(int i = 1; i < 32;i++ ){
                             uint32_t diff_ticks = (puffer[i] > puffer[i-1]) ?
                                             (puffer[i] - puffer[i-1]) :
                                             (puffer[i-1] - puffer[i]);
 
-                            float diff_ms = diff_ticks * 0.016;
+                            float diff_ms = diff_ticks * 0.004;
                             beat_error_sum += diff_ms;
                         }
 
+                        //==================================================
+                        // EMA es digitalis szuro megvalositas kijelzeshez
+                        //==================================================
 
-                        float Average_rate = Current_rate; // az adott korpuffer atlag lesz a kiirando adat
-                        float Average_beat_error = (beat_error_sum / 7.0); // azert csak hettel osztunk mert a 8 elemu pufferben csak 7 hiba ertek van,
-                       // (matematikailag igy jon ki)
+                        static float Display_rate = 0.0;
+                        static bool First_calc = true;
 
+                        // lehetetlennek tuno elszalt adatok kiszurese
+                        if(Current_rate <300.0 && Current_rate > -300.0){
+
+
+                            if(First_calc){
+                                Display_rate = Current_rate; // Legelső alkalommal átveszi a nyers értéket
+                                First_calc = false;
+                            } else {
+                                // ema algoritmus (exponential moving avarage)
+                                // 80% a regi stabilitasbol es csak 20% az uj ertekbol
+                                Display_rate = (Display_rate * 0.8) + (Current_rate * 0.2);
+                            }
+                        }
+                        else{
+                            // zaj volt a hangtuske, kiirjuk uartra
+                            UART_Print("Zaj kiszűrve!\r\n");
+                        }
+
+                        float Average_beat_error = (beat_error_sum / 31.0);
 
 
 
@@ -291,13 +349,17 @@ int main(){
                         char line2[17]; // LCD kijelzo 2.  soranak puffere
 
                         char rate_str[10]; // atmeneti puffer
-                        dtostrf(Average_rate, 4, 1, rate_str); // mivel a sima sprintf uC-n nem tud float erteket stringe konvertalni,
+                        //dtostrf(Average_rate, 4, 1, rate_str); // mivel a sima sprintf uC-n nem tud float erteket stringe konvertalni,
                         //ezert egy direkt uC-re kifejlesztett fugvennyel helyettesitettem
+
+                        dtostrf(Display_rate, 4, 1, rate_str);
+
 
                         char beat_error_str[10];
                         dtostrf(Average_beat_error, 3, 1, beat_error_str);
 
-                        char plusminus = (Average_rate >= 0) ? '+' : '\0'; // napi elteres elojelenek meghatarozasa
+                        //char plusminus = (Average_rate >= 0) ? '+' : '\0'; // napi elteres elojelenek meghatarozasa
+                        char plusminus = (Display_rate >= 0) ? '+' : '\0';
                         sprintf(line1, "Rate:%c%s s/d", plusminus, rate_str);
 
                         sprintf(line2, "B.err: %s ms", beat_error_str);

@@ -23,7 +23,7 @@ void SetupTimer(){
  előosztás: 1 0 0
 
  */
- TCCR1B |= (1<<CS12);
+ TCCR1B |= (1<<CS11) | (1<<CS10);
  /*
  TIMSK1 (timer/counter interrupt mask register)
 
@@ -86,6 +86,8 @@ DIDR1 (digital input disable register)
 }
 
 void SetupDS3231(){
+    DDRD &= ~(1 << PD2);
+    PORTD |= (1 << PD2);
 
     // az ora modult a D2 lábra kötöttük be
     EICRA |= (1 << ISC01); // megszakitas lefuto elre lesz
